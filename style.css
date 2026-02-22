@@ -1,0 +1,275 @@
+(function() {
+    var flicking=false //variable that can be changed by key ctrl if you dont wanna include flicking
+
+    const height={'grimReaper':156, 'pumpkinGhost':169, 'ghostlyReaper':165}//ghostly is actually higher than reaper??
+
+    //the position returned using game.me.position is the left down point position, reapers are symmetrical regarding to its center
+    //First key is attacker, second key is target, value is the longest distance between these two that a attacker could damage the target
+    const hitRangeX={'grimReaper':{'grimReaper':138 , 'pumpkinGhost':124,'ghostlyReaper':108},//135, 148.41, 105.3//y,y,n
+                    'pumpkinGhost':{'grimReaper':161, 'pumpkinGhost':151, 'ghostlyReaper':108},//160.48, 150, 105.46//y,y,n
+                    'ghostlyReaper':{'grimReaper':98, 'pumpkinGhost':87, 'ghostlyReaper':108}//134.07, 150, 107//n,n,y
+    }
+
+    //To be adjustedd, cuz every reaper is able to fight below their entity box a bit
+    const distAdjustmentY={'grimReaper':8, 'pumpkinGhost':3, 'ghostlyReaper':1}
+
+    //hit range when attacker hit target from back.
+    const hitBackRangeX={'grimReaper':{'grimReaper':134, 'pumpkinGhost':150, 'ghostlyReaper':144},//135, 122.93, 143.12
+                    'pumpkinGhost':{'grimReaper':158, 'pumpkinGhost':148, 'ghostlyReaper':172},//135, 150, 170
+                    'ghostlyReaper':{'grimReaper':134, 'pumpkinGhost':87, 'ghostlyReaper':105}//96.03, 85.5, 107
+    }
+
+    const reaperList = new Set(['grimReaper', 'pumpkinGhost', 'ghostlyReaper']);
+
+    function simulateQuickRightArrowKeyWithDelay() {
+        // Dispatch keydown
+        const keyDownEvent = new KeyboardEvent('keydown', {
+            key: 'ArrowRight',
+            code: 'ArrowRight',
+            keyCode: 39,
+            which: 39,
+            bubbles: true,
+            cancelable: true
+        });
+        document.dispatchEvent(keyDownEvent);
+
+        // Set a short delay before dispatching keyup
+        setTimeout(() => {
+            const keyUpEvent = new KeyboardEvent('keyup', {
+                key: 'ArrowRight',
+                code: 'ArrowRight',
+                keyCode: 39,
+                which: 39,
+                bubbles: true,
+                cancelable: true
+            });
+            document.dispatchEvent(keyUpEvent);
+        }, 200);
+    }
+
+    function simulateQuickLeftArrowKeyWithDelay() {
+        // Dispatch keydown
+        const keyDownEvent = new KeyboardEvent('keydown', {
+            key: 'ArrowLeft',
+            code: 'ArrowLeft',
+            keyCode: 37,
+            which: 37,
+            bubbles: true,
+            cancelable: true
+        });
+        document.dispatchEvent(keyDownEvent);
+
+        // Set a short delay before dispatching keyup
+        setTimeout(() => {
+            const keyUpEvent = new KeyboardEvent('keyup', {
+                key: 'ArrowLeft',
+                code: 'ArrowLeft',
+                keyCode: 37,
+                which: 37,
+                bubbles: true,
+                cancelable: true
+            });
+            document.dispatchEvent(keyUpEvent);
+        }, 200);
+    }
+
+    function getMagnitude(objPos) {
+        var myPos = game.me.position;
+        var xDifference = Math.abs(myPos.x - objPos.x);
+        var yDifference = Math.abs(myPos.y - objPos.y);
+        return xDifference + yDifference;//this calculation uses less time? Is it worth it to sacrifice the accuracy?
+    }
+
+    function getClosestReaper() {
+        if (gameServer == 'undefined' || game.me == 'undefined' || imDead || !joinedGame) {
+            return;
+        }
+
+        let list = game.sortToDraw(game.hashMap.retrieveVisibleByClient(game));
+        let reaperInVision = [];
+        for(let i=0; i < list.length; i++) {
+            var curEntity = list[i];
+            if (curEntity.hp != null && curEntity.deleted == false) { //Is Food or character
+                if (curEntity.level != null) { //Is Character
+                    if (curEntity.name!='grimReaper' || curEntity.name!='ghostlyReaper' || curEntity.name!='pumpkinGhost')// Is reaper
+                        if (curEntity == game.me) {
+                            continue;
+                        }
+
+                    reaperInVision.push(curEntity);
+                }
+            }
+        }
+
+        var closestReaper = 'undefined';
+        var closestMagn = 'undefined';
+        for(var i = 0; i < reaperInVision.length; i++) {
+            var curEntry = reaperInVision[i];
+            if (closestReaper === 'undefined') {
+                closestReaper = curEntry;
+                closestMagn = getMagnitude(curEntry.position);
+            } else {
+                var checkingMagn = getMagnitude(curEntry.position);
+                if (checkingMagn < closestMagn) {
+                    closestReaper = curEntry;
+                    closestMagn = checkingMagn;
+                }
+            }
+        }
+        return closestReaper
+    };
+
+    function isWithinXRange(attacker, target, range, distAdjustment = 0) {//assume you're facing enemy, i.e., you must manually do the "turn around" action
+
+        var x1 = attacker.position.x
+        var x2 = target.position.x
+        var relativeSpeed = Math.abs(attacker.moveSpeed.x - target.moveSpeed.x)
+        const frameTime = 700 / lastFps; // in milliseconds
+        const serverDelay = latency;
+        const totalDelay = frameTime + serverDelay;
+        var effectiveDist = Math.abs(x2-x1) - totalDelay*relativeSpeed/1000 + distAdjustment;
+
+        if (effectiveDist<=range[attacker.name][target.name]){
+            return true
+        }else{
+            return false
+        }
+    }
+
+    function isWithinYRange(attacker, target, heights, distAdjustment = 0) {
+
+        var y1 = attacker.position.y
+        var y2 = target.position.y
+        var relativeSpeed = Math.abs(attacker.moveSpeed.y - target.moveSpeed.y)
+        const frameTime = 700 / lastFps; // in milliseconds
+        const serverDelay = latency;
+        const totalDelay = frameTime + serverDelay;
+        var effectiveDist = Math.abs(y2-y1) - totalDelay*relativeSpeed/700 + distAdjustment;
+        if (y1>y2){
+            hitRangeY=heights[target.name]
+        }else if (y1<=y2){
+            hitRangeY=heights[attacker.name]
+        }
+        if (effectiveDist<=hitRangeY){
+            return true
+        }else{
+            return false
+        }
+    }
+
+    function autoHit(){
+        let enemy=getClosestReaper()
+        if (typeof enemy != 'object' || typeof game.me != 'object' || !reaperList.has(game.me.name)){
+            return
+        }
+
+        //decide direction
+        let onLeftSide = (game.me.position.x<=enemy.position.x) //if Im on left side of enemy
+        let enemyFlicking = (onLeftSide && enemy.direction===1) || (!onLeftSide && enemy.direction===-1) //If enemy is turning his back on you
+        let facingEnemy = (onLeftSide && game.me.direction===1) || (!onLeftSide && game.me.direction===-1) //if Im facing enemy or trying to flick
+
+        if (!flicking){
+            facingEnemy=true
+        }
+
+
+        //fighting type: flick or not flick, front distance or back distance
+        if (facingEnemy){
+            if (enemyFlicking){
+                if (isWithinXRange(game.me, enemy, hitBackRangeX) && isWithinYRange(game.me, enemy, height)){
+                    skillUse()
+                    setTimeout(skillStop,100)
+                }
+            } else if (!enemyFlicking){
+                if (isWithinXRange(game.me, enemy, hitRangeX) && isWithinYRange(game.me, enemy, height)){
+                    skillUse()
+                    setTimeout(skillStop,100)
+                }
+            }
+        } else if (!facingEnemy){
+            if (enemyFlicking){
+                if (isWithinXRange(game.me, enemy, hitBackRangeX, -25) && isWithinYRange(game.me, enemy, height)){
+                    if (onLeftSide){
+                        simulateQuickRightArrowKeyWithDelay();
+                        skillUse()
+                        setTimeout(skillStop,100)
+                    } else if (!onLeftSide){
+                        simulateQuickLeftArrowKeyWithDelay();
+                        skillUse()
+                        setTimeout(skillStop,100)
+                    }
+
+                }
+            } else if (!enemyFlicking){
+                if (isWithinXRange(game.me, enemy, hitRangeX ,-5) && isWithinYRange(game.me, enemy, height)){
+                    if (onLeftSide){
+                        simulateQuickRightArrowKeyWithDelay();
+                        skillUse()
+                        setTimeout(skillStop,100)
+                    } else if (!onLeftSide){
+                        simulateQuickLeftArrowKeyWithDelay();
+                        skillUse()
+                        setTimeout(skillStop,100)
+                    }
+                }
+            }
+        }
+        //console.log([isWithinXRange(game.me, enemy),isWithinYRange(game.me, enemy)])
+    }
+
+    var autoHitting=false
+    document.addEventListener("keyup", (event) => {
+        if (event.keyCode === 40) { // 'arrowDown' key
+            if (!autoHitting){
+                autoHitting=!autoHitting
+                textMsg("Autohitting", '#00FF00', 5000);
+            }else{
+                autoHitting=!autoHitting
+                textMsg("NOT Autohitting", '#FF0000', 5000);
+            }
+
+        } else if (event.keyCode === 73) { // 'i' key
+            console.log(game.me.position.x-getClosestReaper().position.x)
+            console.log(game.me.position.y-getClosestReaper().position.y)
+        } else if (event.keyCode === 32) { // ' ' key
+            //console.log('time to stop')
+            skillStop()
+        } else if (event.keyCode === 17) { // 'ctrl' key
+            if (!flicking){
+                flicking=!flicking
+                textMsg("Flicking", '#00FF00', 5000);
+            }else{
+                flicking=!flicking
+                textMsg("NOT Flicking", '#FF0000', 5000);
+            }
+
+        }
+    });
+
+    function initialize() {
+        gameServer['on']('disconnect', function() {
+            gameServer = 'undefined';
+            waitForServer();
+        });
+
+        if (typeof gameServer.on === 'function') {
+            gameServer['on'](socketMsgType.SYNC, function(data) {
+                if (autoHitting) {
+                    autoHit()
+                }
+            });
+        } else {
+            console.error('gameServerOn is not a function');
+        }
+    };
+
+    function waitForServer() {
+        if (typeof gameServer == 'undefined' || typeof gameServer['on'] == 'undefined') {
+            setTimeout(waitForServer, 1000)
+        } else {
+            initialize()
+        }
+    }
+
+    waitForServer();
+})();
